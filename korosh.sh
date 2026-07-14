@@ -27,7 +27,7 @@ banner() {
     echo "   ██║  ██╗╚██████╔╝██║  ██║╚██████╔╝███████║██║  ██║"
     echo "   ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝"
     echo -e "${NC}"
-    echo -e "  ${BOLD}${W}Korosh${NC}  ${DIM}v2  · Fast & Lightweight · by Dnt3e${NC}"
+    echo -e "  ${BOLD}${W}Korosh${NC}  ${DIM}v2  · Fast & Lightweight · by devprogrmer${NC}"
     echo -e "${LINE}"
     _show_status
     echo -e "${LINE}"
