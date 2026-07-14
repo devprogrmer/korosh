@@ -6,7 +6,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 IFACE="kvpn"
-IMG="stormotron/korosh:0.0.3"
+IMG=""
 CONF_FILE="/etc/korosh.conf"
 SERVICE_FILE="/etc/systemd/system/korosh.service"
 INSTALL_DIR="/usr/local/bin"
