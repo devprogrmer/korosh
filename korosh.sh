@@ -6,13 +6,12 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 IFACE="kvpn"
-IMG=""
+IMG="stormotron/korosh:0.0.3"
 CONF_FILE="/etc/korosh.conf"
 SERVICE_FILE="/etc/systemd/system/korosh.service"
 INSTALL_DIR="/usr/local/bin"
 SCRIPT_NAME="korosh"
 LOG_FILE="/tmp/korosh_install.log"
-SPOOF_BIN="/usr/local/bin/spooftunnel"
 
 R="\e[38;5;204m"; G="\e[32m"; Y="\e[33m"; C="\e[36m"; W="\e[97m"
 DIM="\e[2m"; BOLD="\e[1m"; NC="\e[0m"
@@ -35,7 +34,7 @@ banner() {
 }
 
 _show_status() {
-    local kernel_fwd docker_stat tunnel_stat fwd_str docker_str is_running spoof_stat
+    local kernel_fwd docker_stat tunnel_stat fwd_str docker_str is_running
     kernel_fwd=$(sysctl net.ipv4.ip_forward 2>/dev/null | awk '{print $3}')
     docker_stat=$(systemctl is-active docker 2>/dev/null || echo "inactive")
     if docker ps -q -f name=korosh_tunnel 2>/dev/null | grep -q .; then
@@ -43,16 +42,9 @@ _show_status() {
     else
         is_running=0; tunnel_stat="${R}${BOLD}OFFLINE${NC}"
     fi
-    
-    if [ -f "$SPOOF_BIN" ]; then
-        spoof_stat="${G}Installed${NC}"
-    else
-        spoof_stat="${DIM}Not Installed${NC}"
-    fi
-
     [ "$kernel_fwd" == "1" ] && fwd_str="${G}enabled${NC}" || fwd_str="${R}disabled${NC}"
     [ "$docker_stat" == "active" ] && docker_str="${G}${docker_stat^^}${NC}" || docker_str="${Y}${docker_stat^^}${NC}"
-    echo -e "  ${W}Tunnel :${NC} ${tunnel_stat}   ${W}SpoofTunnel:${NC} ${spoof_stat}"
+    echo -e "  ${W}Tunnel :${NC} ${tunnel_stat}"
     echo -e "  ${W}Docker :${NC} ${docker_str}   ${W}IP Forward :${NC} ${fwd_str}"
     if [ "$is_running" == "1" ]; then
         local ip_addr
@@ -91,12 +83,12 @@ install_deps() {
     echo -e "${LINE}"
     show_progress 0.04 "Checking Tools  "
     if ! command -v ip &>/dev/null || ! command -v iptables &>/dev/null || \
-       ! command -v curl &>/dev/null || ! command -v ip6tables &>/dev/null; then
+       ! command -v curl &>/dev/null; then
         echo "Installing network tools..." >> "$LOG_FILE"
         if [ -f /etc/debian_version ]; then
-            apt-get update -q && apt-get install -y -q iproute2 iptables curl vnstat iptables-persistent >> "$LOG_FILE" 2>&1
+            apt-get update -q && apt-get install -y -q iproute2 iptables curl >> "$LOG_FILE" 2>&1
         elif [ -f /etc/redhat-release ]; then
-            yum install -y -q iproute iptables curl vnstat iptables-services >> "$LOG_FILE" 2>&1
+            yum install -y -q iproute iptables curl >> "$LOG_FILE" 2>&1
         fi
     fi
     show_progress 0.04 "Checking Docker "
@@ -112,65 +104,6 @@ install_deps() {
     fi
     echo -e "  ${G}[OK] Dependencies ready.${NC}"
     sleep 1
-}
-
-optimize_network() {
-    banner
-    echo -e "${BOLD}${C}  🚀 Optimize Network (BBR & UDP Gaming)${NC}"
-    echo -e "${LINE}"
-    
-    cat > /etc/sysctl.d/99-korosh-gaming.conf <<EOF
-# Advanced UDP Buffers for Gaming
-net.core.rmem_max=26214400
-net.core.rmem_default=26214400
-net.core.wmem_max=26214400
-net.core.wmem_default=26214400
-net.ipv4.udp_mem=65536 131072 262144
-net.ipv4.udp_rmem_min=16384
-net.ipv4.udp_wmem_min=16384
-
-# BBR & TCP (Reduces overhead/latency for control connections)
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-
-# MTU Probing (Prevents UDP fragmentation)
-net.ipv4.tcp_mtu_probing=1
-EOF
-    sysctl --system >> "$LOG_FILE" 2>&1
-    
-    # Apply DSCP QoS Marking for UDP
-    iptables -t mangle -C OUTPUT -p udp -j TOS --set-tos 0x10 2>/dev/null || \
-    iptables -t mangle -A OUTPUT -p udp -j TOS --set-tos 0x10
-    
-    ip6tables -t mangle -C OUTPUT -p udp -j TOS --set-tos 0x10 2>/dev/null || \
-    ip6tables -t mangle -A OUTPUT -p udp -j TOS --set-tos 0x10
-
-    if command -v netfilter-persistent &>/dev/null; then
-        netfilter-persistent save >> "$LOG_FILE" 2>&1
-    fi
-
-    echo -e "  ${G}[OK] Kernel and UDP buffers optimized for gaming.${NC}"
-    echo -e "  ${G}[OK] QoS DSCP tags applied for Low Delay (0x10).${NC}"
-    read -p "  Press Enter..."
-}
-
-install_spooftunnel() {
-    banner
-    echo -e "${BOLD}${C}  🛡️  Install SpoofTunnel (Rust DPI-Bypass)${NC}"
-    echo -e "${LINE}"
-    echo -e "  ${Y}Fetching latest SpoofTunnel release...${NC}"
-    
-    # Note: Replace URL with actual github release URL if different
-    local LATEST_URL="https://github.com/devprogrmer/SpoofTunnel/releases/latest/download/spooftunnel-linux-amd64"
-    
-    if curl -sL "$LATEST_URL" -o "$SPOOF_BIN"; then
-        chmod +x "$SPOOF_BIN"
-        echo -e "  ${G}[OK] SpoofTunnel installed successfully to $SPOOF_BIN${NC}"
-        echo -e "  ${DIM}Use 'spooftunnel --help' in terminal to configure.${NC}"
-    else
-        echo -e "  ${R}[FAIL] Could not download SpoofTunnel.${NC}"
-    fi
-    read -p "  Press Enter..."
 }
 
 create_service() {
@@ -198,15 +131,11 @@ EOF
 apply_firewall() {
     source "$CONF_FILE" 2>/dev/null
     sysctl -w net.ipv4.ip_forward=1 >> "$LOG_FILE" 2>&1
-    sysctl -w net.ipv6.conf.all.forwarding=1 >> "$LOG_FILE" 2>&1
-    
     grep -q "^net.ipv4.ip_forward" /etc/sysctl.conf 2>/dev/null \
         && sed -i 's/^net.ipv4.ip_forward.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf \
         || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-        
     iptables -t nat -C POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE 2>/dev/null || \
     iptables -t nat -A POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE
-    
     if [ "$TYPE" == "1" ]; then
         iptables -t nat -C POSTROUTING -o "$IFACE" -j MASQUERADE 2>/dev/null || \
         iptables -t nat -A POSTROUTING -o "$IFACE" -j MASQUERADE
@@ -215,7 +144,6 @@ apply_firewall() {
         iptables -C FORWARD -i "$IFACE" -o "$DEFAULT_IF" -j ACCEPT 2>/dev/null || \
         iptables -I FORWARD -i "$IFACE" -o "$DEFAULT_IF" -j ACCEPT
     fi
-    
     if [ "$TYPE" == "1" ] && [ -n "$PORT_LIST" ]; then
         IFS=',' read -ra ADDR <<< "$PORT_LIST"
         for port in "${ADDR[@]}"; do
@@ -265,13 +193,6 @@ start_logic() {
     if [ "$(docker ps -aq -f name=korosh_tunnel)" ]; then
         docker rm -f korosh_tunnel >> "$LOG_FILE" 2>&1
     fi
-    
-    # Ensure IPv6 format is bracketed if passed to Docker env
-    local remote_fmt="$R_IP"
-    if [[ "$remote_fmt" == *":"* && "$remote_fmt" != *"["* ]]; then
-        remote_fmt="[${remote_fmt}]"
-    fi
-
     local -a dcmd=(
         docker run
         --cap-add=NET_ADMIN
@@ -281,7 +202,7 @@ start_logic() {
         -e "PASSWORD=${PSWD}"
     )
     if [ "$TYPE" == "1" ]; then
-        dcmd+=(-e "REMOTE_IP=${remote_fmt}")
+        dcmd+=(-e "REMOTE_IP=${R_IP}")
         [ -n "$DSCP_MARK" ] && dcmd+=(-e "DSCP_MARK=${DSCP_MARK}")
     else
         dcmd+=(-e "SERVER=${SERVER_LISTEN:-0.0.0.0}")
@@ -369,14 +290,13 @@ create_tunnel() {
     if [ "$TYPE" == "1" ]; then
         L_IP="10.200.200.2"; R_INT="10.200.200.1"; SERVER_LISTEN=""
         while true; do
-            read -p "  FOREIGN server IP/IPv6 (remote): " R_IP
+            read -p "  FOREIGN server IP (remote): " R_IP
             [ -n "$R_IP" ] && break
             echo -e "  ${R}Remote IP cannot be empty.${NC}"
         done
     else
         L_IP="10.200.200.1"; R_INT="10.200.200.2"; R_IP=""
         SERVER_LISTEN="0.0.0.0"
-        echo -e "  ${DIM}Tip: For IPv6 support, leave as 0.0.0.0 or use [::]${NC}"
         read -p "  Listen IP [0.0.0.0]: " _v
         [ -n "$_v" ] && SERVER_LISTEN="$_v"
     fi
@@ -450,7 +370,7 @@ edit_config() {
     read -p "  Link quality      [${LINK_QUALITY:-none}]: " _v; [ -n "$_v" ] && LINK_QUALITY="$_v"
     read -p "  Ban quality       [${BAN_QUALITY:-none}]: "  _v; [ -n "$_v" ] && BAN_QUALITY="$_v"
     if [ "$TYPE" == "1" ]; then
-        read -p "  Remote IP/IPv6   [${R_IP}]: "               _v; [ -n "$_v" ] && R_IP="$_v"
+        read -p "  Remote IP        [${R_IP}]: "               _v; [ -n "$_v" ] && R_IP="$_v"
         read -p "  DSCP mark        [${DSCP_MARK:-none}]: "    _v; [ -n "$_v" ] && DSCP_MARK="$_v"
         read -p "  Port forwarding  [${PORT_LIST:-none}]: "    _v; [ -n "$_v" ] && PORT_LIST="$_v"
     else
@@ -634,20 +554,13 @@ mtu_optimizer() {
     else
         target="$R_INT"
     fi
-    
-    if [[ "$target" == *":"* ]]; then
-        echo -e "  ${Y}Note: Ping optimization via IPv6 target is experimental.${NC}"
-    fi
 
     echo -e "  ${W}Target :${NC} ${Y}${target}${NC}"
     echo -e "  ${W}Current MTU :${NC} ${DIM}${TUNNEL_MTU:-auto}${NC}"
     echo -e "${LINE}"
 
     echo -e "  ${Y}[1/4] Testing peer connectivity...${NC}"
-    local ping_cmd="ping"
-    [[ "$target" == *":"* ]] && ping_cmd="ping6"
-    
-    if ! $ping_cmd -c2 -W2 "$target" &>/dev/null; then
+    if ! ping -c2 -W2 "$target" &>/dev/null; then
         echo -e "  ${R}[ERROR] Cannot reach ${target}. Is the tunnel up?${NC}"
         read -p "  Press Enter..."; return
     fi
@@ -661,7 +574,7 @@ mtu_optimizer() {
     while [ $(( high - low )) -gt 1 ]; do
         local mid=$(( (low + high) / 2 ))
         printf "  Testing %d bytes ...\r" "$mid"
-        if $ping_cmd -c2 -W2 -M do -s $(( mid - 28 )) "$target" &>/dev/null 2>&1; then
+        if ping -c2 -W2 -M do -s $(( mid - 28 )) "$target" &>/dev/null 2>&1; then
             best=$mid; low=$mid
         else
             high=$mid
@@ -843,13 +756,6 @@ clean_all() {
         fi
     fi
     ip link delete "$IFACE" 2>/dev/null
-    
-    # Remove QoS rules and SpoofTunnel binary
-    iptables -t mangle -D OUTPUT -p udp -j TOS --set-tos 0x10 2>/dev/null
-    ip6tables -t mangle -D OUTPUT -p udp -j TOS --set-tos 0x10 2>/dev/null
-    rm -f /etc/sysctl.d/99-korosh-gaming.conf
-    rm -f "$SPOOF_BIN"
-    
     rm -f "$CONF_FILE" "$SERVICE_FILE" "$INSTALL_DIR/$SCRIPT_NAME"
     systemctl daemon-reload 2>/dev/null
     echo -e "  ${G}[OK] Korosh removed successfully.${NC}"
@@ -868,10 +774,7 @@ menu() {
         echo -e "   ${W}3)${NC} 🔧  Tunnel Manager"
         echo -e "   ${W}4)${NC} 📊  Tunnel Dashboard"
         echo -e "${LINE}"
-        echo -e "   ${W}5)${NC} 🚀  Optimize Network (BBR & UDP)"
-        echo -e "   ${W}6)${NC} 🛡️   Install SpoofTunnel (Rust DPI-Bypass)"
-        echo -e "${LINE}"
-        echo -e "   ${W}7)${NC} 🗑️   Uninstall & Remove"
+        echo -e "   ${W}5)${NC} 🗑️   Uninstall & Remove"
         echo -e "${LINE}"
         echo -e "   ${W}0)${NC} 🚪  Exit"
         echo -e "${LINE}"
@@ -882,9 +785,7 @@ menu() {
             2) create_tunnel ;;
             3) tunnel_manager ;;
             4) tunnel_dashboard ;;
-            5) optimize_network ;;
-            6) install_spooftunnel ;;
-            7) clean_all ;;
+            5) clean_all ;;
             0) echo -e "  ${G}Goodbye.${NC}"; exit 0 ;;
             *) echo -e "  ${R}Invalid option.${NC}"; sleep 1 ;;
         esac
